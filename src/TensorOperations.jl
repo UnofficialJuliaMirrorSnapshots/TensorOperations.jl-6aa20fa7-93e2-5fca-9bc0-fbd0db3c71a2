@@ -5,6 +5,7 @@ using Strided
 using Strided: AbstractStridedView, UnsafeStridedView
 using LinearAlgebra
 using LinearAlgebra: mul!, BLAS.BlasFloat
+using LRUCache
 
 # export macro API
 export @tensor, @tensoropt, @optimalcontractiontree
@@ -36,7 +37,7 @@ include("indexnotation/poly.jl")
 # Implementations
 #-----------------
 include("implementation/indices.jl")
-include("implementation/lrucache.jl")
+#include("implementation/lrucache.jl")
 include("implementation/tensorcache.jl")
 include("implementation/stridedarray.jl")
 include("implementation/diagonal.jl")
@@ -61,7 +62,10 @@ function enable_blas()
 end
 
 # A cache for temporaries of tensor contractions
-const cache = LRU{Symbol,Any}()
+memsize(a::Array) = sizeof(a)
+memsize(a) = Base.summarysize(a)
+
+const cache = LRU{Tuple{Symbol,Int}, Any}(; by = memsize, maxsize = 2^30)
 const _use_cache = Ref(true)
 use_cache() = _use_cache[]
 
@@ -77,15 +81,22 @@ function disable_cache()
 end
 
 """
-    enable_cache(; maxsize::Int = ..., maxrelsize::Real = 0.5)
+    enable_cache(; maxsize::Int = ..., maxrelsize::Real = ...)
 
 (Re)-enable the cache for further use; set the maximal size `maxsize` (as number of bytes)
 or relative size `maxrelsize`, as a fraction between 0 and 1, resulting in
-`maxsize = floor(Int, maxrelsize * Sys.total_memory())`.
+`maxsize = floor(Int, maxrelsize * Sys.total_memory())`. Default value is `maxsize = 2^30` bytes, which amounts to 1 gigabyte of memory.
 """
-function enable_cache(; kwargs...)
+function enable_cache(; maxsize::Int = -1, maxrelsize::Real = 0.0)
+    if maxsize == -1 && maxrelsize == 0.0
+        maxsize = 2^30
+    elseif maxrelsize > 0
+        maxsize = max(maxsize, floor(Int, maxrelsize*Sys.total_memory()))
+    else
+        @assert maxsize >= 0
+    end
     _use_cache[] = true
-    setsize!(cache; kwargs...)
+    resize!(cache; maxsize = maxsize)
     return
 end
 
@@ -179,6 +190,7 @@ function _precompile_()
     @assert precompile(Tuple{typeof(mulcost), Power{:χ, Int64}, Power{:χ, Int64}})
     @assert precompile(Tuple{typeof(ncontree), Vector{AVector}})
     @assert precompile(Tuple{typeof(optdata), Expr})
+    @assert precompile(Tuple{typeof(optdata), Expr, Expr})
     @assert precompile(Tuple{typeof(optimaltree), Vector{AVector}, Base.Dict{Any, Power{:χ, Int64}}})
     @assert precompile(Tuple{typeof(parsecost), Expr})
     @assert precompile(Tuple{typeof(parsecost), Int64})
@@ -202,10 +214,7 @@ function _precompile_()
     @assert precompile(Tuple{typeof(storeset), Type{UInt64}, AVector, Int64})
     @assert precompile(Tuple{typeof(storeset), Type{UInt64}, Array{Int64, 1}, Int64})
     @assert precompile(Tuple{typeof(storeset), Type{UInt64}, Base.Set{Int64}, Int64})
-    @assert precompile(Tuple{typeof(tensorify), Expr, Nothing})
-    @assert precompile(Tuple{typeof(tensorify), Expr, Int})
     @assert precompile(Tuple{typeof(tensorify), Expr})
-    @assert precompile(Tuple{typeof(tensorify), Int, Int})
     @assert precompile(Tuple{typeof(tree2expr), Int, Int})
     @assert precompile(Tuple{typeof(unique2), AVector})
     @assert precompile(Tuple{typeof(unique2), Array{Int64, 1}})
